@@ -1,0 +1,14 @@
+{
+  "name": "mask-bridge",
+  "version": "1.0.0",
+  "description": "WebSocket bridge between maskd's TCP JSON IPC and browser-based frontends.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
