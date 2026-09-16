@@ -5,19 +5,29 @@
 #include <stdint.h>
 #include <pthread.h>
 
+/**
+ * @file ring_buffer.h
+ * @brief Bounded in-memory event log used by MASK for short-term reasoning state.
+ */
+
 #define MASK_MEMORY_ROLE_MAX 16
 #define MASK_MEMORY_TEXT_MAX 512
 
+/**
+ * @brief Single observation stored in the agent memory ring.
+ */
 struct mask_memory_entry {
     uint64_t timestamp_ms;
     char role[MASK_MEMORY_ROLE_MAX];
     char text[MASK_MEMORY_TEXT_MAX];
 };
 
-/* Fixed-arena ring buffer: backing storage is allocated once at init and
- * never grows or shrinks. Oldest entries are overwritten once full.
- * Safe for concurrent push/snapshot from multiple threads (reactor thread,
- * LLM worker threads). */
+/**
+ * @brief Fixed-capacity, mutex-protected ring buffer for bounded memory.
+ *
+ * The backing array is allocated at initialization and reused until shutdown.
+ * Once the buffer is full, the oldest entries are overwritten.
+ */
 struct mask_ring_buffer {
     struct mask_memory_entry *entries;
     size_t capacity;
@@ -26,14 +36,38 @@ struct mask_ring_buffer {
     pthread_mutex_t lock;
 };
 
+/**
+ * @brief Initializes a ring buffer with a fixed capacity.
+ *
+ * @param rb Ring buffer to initialize.
+ * @param capacity Number of memory entries to store.
+ * @return MASK_OK on success, MASK_ERR on allocation or mutex failure.
+ */
 int mask_ring_buffer_init(struct mask_ring_buffer *rb, size_t capacity);
+
+/**
+ * @brief Releases resources owned by the ring buffer.
+ * @param rb Ring buffer to destroy.
+ */
 void mask_ring_buffer_destroy(struct mask_ring_buffer *rb);
 
-/* Truncates text to MASK_MEMORY_TEXT_MAX - 1 if longer. */
+/**
+ * @brief Appends a new memory entry to the ring, sanitizing control characters.
+ *
+ * @param rb Target ring buffer.
+ * @param role Source or category label for the observation.
+ * @param text Message text to store. It is truncated to fit the fixed slot size.
+ */
 void mask_ring_buffer_push(struct mask_ring_buffer *rb, const char *role, const char *text);
 
-/* Copies up to max_out most recent entries, oldest-first, into out.
- * Returns the number of entries actually copied. */
+/**
+ * @brief Copies the most recent entries into a caller-supplied array.
+ *
+ * @param rb Ring buffer to read from.
+ * @param out Destination buffer for copied entries.
+ * @param max_out Maximum number of entries to copy.
+ * @return Number of entries actually copied.
+ */
 size_t mask_ring_buffer_snapshot(struct mask_ring_buffer *rb,
                                   struct mask_memory_entry *out,
                                   size_t max_out);

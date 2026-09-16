@@ -11,6 +11,11 @@
 #include <sys/wait.h>
 #include <sys/resource.h>
 
+/**
+ * @file sandbox.c
+ * @brief POSIX process sandbox used to run LLM-triggered tool commands safely.
+ */
+
 void mask_sandbox_default_limits(struct mask_sandbox_limits *limits) {
     limits->cpu_seconds = 5;
     limits->address_space_mb = 256;

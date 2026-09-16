@@ -9,6 +9,12 @@ version. Undated `[Unreleased]` collects work not yet cut into a version.
 ## [Unreleased]
 
 ### Added
+- Engineering-focused repository documentation for a native C systems project:
+  - [`CONTRIBUTING.md`](CONTRIBUTING.md) with memory discipline, thread-safety rules, and tool-registration guidance.
+  - [`ARCHITECTURE.md`](ARCHITECTURE.md) documenting the event-loop state flow, ring-buffer layout, sandbox process model, and signal lifecycle.
+  - [`SECURITY.md`](SECURITY.md) covering command sanitization, `setrlimit` protections, and process isolation guidelines.
+  - [`Doxyfile`](Doxyfile) for generating API docs with Doxygen from the public C interfaces.
+- Doxygen-style API comments added to the public headers and sandbox implementation to improve generated documentation quality and maintainability.
 - Modern remote web control panel for system monitoring, alert review, and fleet visibility.
 - Browser-based operational oversight so admins can manage and inspect the daemon without direct on-prem terminal access.
 - Remote administration workflows for monitoring, diagnostics, and status review across multiple endpoints.

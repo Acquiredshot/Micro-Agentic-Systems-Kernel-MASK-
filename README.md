@@ -225,6 +225,17 @@ bridge/             Node.js WebSocket bridge (daemon TCP/JSON -> browser WS)
 web/                Vite + React + Tailwind dashboard
 ```
 
+## Engineering documentation
+
+MASK includes a production-oriented documentation set for native C systems work:
+
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contributor standards for bounded memory, thread safety, process isolation, and tool-registration patterns.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — a low-level blueprint of the state machine, ring-buffer memory layout, sandbox execution flow, and event-loop lifecycle.
+- [`SECURITY.md`](SECURITY.md) — execution safety guidance for `setrlimit`, command sanitization, privileged boundaries, and child-process isolation.
+- [`Doxyfile`](Doxyfile) — Doxygen configuration for generating API docs from the C headers and source files.
+
+These files are intended to make the codebase easier to audit, extend, and maintain as a native systems project rather than a loose script wrapper around an LLM.
+
 ## Known limitations
 
 This is a scaffold, not a finished agent:
