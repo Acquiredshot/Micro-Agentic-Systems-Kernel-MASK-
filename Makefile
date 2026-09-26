@@ -17,6 +17,9 @@ SRCS := \
 	src/ipc.c \
 	src/tools/tool_sysinfo.c \
 	src/tools/tool_shell.c \
+	src/tools/tool_net.c \
+	src/tools/tool_asset.c \
+	src/tools/tool_action.c \
 	third_party/cjson/cJSON.c
 
 OBJS := $(SRCS:.c=.o)

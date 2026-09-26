@@ -15,8 +15,8 @@ int tool_run_shell(const char *args_json, char *output, size_t output_size);
 int main(void) {
     struct mask_tool_gateway gw;
     mask_tool_gateway_init(&gw);
-    assert(mask_tool_gateway_register(&gw, "sysinfo", "sys info", tool_sysinfo) == MASK_OK);
-    assert(mask_tool_gateway_register(&gw, "run_shell", "run shell", tool_run_shell) == MASK_OK);
+    assert(mask_tool_gateway_register(&gw, "sysinfo", "sys info", tool_sysinfo, MASK_TOOL_PHASE_OBSERVE) == MASK_OK);
+    assert(mask_tool_gateway_register(&gw, "run_shell", "run shell", tool_run_shell, MASK_TOOL_PHASE_INVESTIGATE) == MASK_OK);
 
     char *manifest = mask_tool_gateway_manifest_json(&gw);
     printf("manifest: %s\n", manifest);
@@ -25,31 +25,31 @@ int main(void) {
     free(manifest);
 
     char out[512];
-    int rc = mask_tool_gateway_dispatch(&gw, "sysinfo", "{}", out, sizeof(out));
+    int rc = mask_tool_gateway_dispatch(&gw, "sysinfo", "{}", out, sizeof(out), MASK_TOOL_PHASE_OBSERVE);
     printf("sysinfo -> rc=%d out=%s\n", rc, out);
     assert(rc == MASK_OK);
     assert(strstr(out, "load1") != NULL);
 
     rc = mask_tool_gateway_dispatch(&gw, "run_shell",
-        "{\"argv\":[\"echo\",\"hello from sandbox\"]}", out, sizeof(out));
+        "{\"argv\":[\"echo\",\"hello from sandbox\"]}", out, sizeof(out), MASK_TOOL_PHASE_INVESTIGATE);
     printf("run_shell echo -> rc=%d out=%s\n", rc, out);
     assert(rc == MASK_OK);
     assert(strstr(out, "hello from sandbox") != NULL);
 
     /* Non-existent binary must fail cleanly, not crash. */
     rc = mask_tool_gateway_dispatch(&gw, "run_shell",
-        "{\"argv\":[\"/no/such/binary\"]}", out, sizeof(out));
+        "{\"argv\":[\"/no/such/binary\"]}", out, sizeof(out), MASK_TOOL_PHASE_INVESTIGATE);
     printf("run_shell bad binary -> rc=%d out=%s\n", rc, out);
     assert(rc != MASK_OK);
 
     /* CPU limit enforcement: a busy loop should get killed by RLIMIT_CPU. */
     rc = mask_tool_gateway_dispatch(&gw, "run_shell",
-        "{\"argv\":[\"sh\",\"-c\",\"while true; do :; done\"]}", out, sizeof(out));
+        "{\"argv\":[\"sh\",\"-c\",\"while true; do :; done\"]}", out, sizeof(out), MASK_TOOL_PHASE_INVESTIGATE);
     printf("run_shell busy-loop -> rc=%d out=%s\n", rc, out);
     assert(rc != MASK_OK);
 
     /* Unknown tool name. */
-    rc = mask_tool_gateway_dispatch(&gw, "does_not_exist", "{}", out, sizeof(out));
+    rc = mask_tool_gateway_dispatch(&gw, "does_not_exist", "{}", out, sizeof(out), MASK_TOOL_PHASE_OBSERVE);
     assert(rc == MASK_ERR);
 
     /* Ring buffer must strip ANSI escape sequences and other control

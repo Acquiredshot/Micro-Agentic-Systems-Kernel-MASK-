@@ -20,6 +20,8 @@
 #define MASK_CFG_TICK_MS_MIN 100
 #define MASK_CFG_TICK_MS_MAX 3600000
 #define MASK_CFG_LLM_EVERY_N_MAX 100000
+#define STRINGIFY_HELPER(x) #x
+#define STRINGIFY(x) STRINGIFY_HELPER(x)
 
 struct mask_ipc_conn {
     int fd;
@@ -62,6 +64,10 @@ static cJSON *build_config_json(void) {
     cJSON_AddBoolToObject(cfg, "paused", g_ctx.cfg->paused);
     cJSON_AddStringToObject(cfg, "llm_endpoint", g_ctx.cfg->llm_endpoint);
     cJSON_AddStringToObject(cfg, "llm_model", g_ctx.cfg->llm_model);
+    cJSON_AddStringToObject(cfg, "asset_id", g_ctx.cfg->asset_id);
+    cJSON_AddStringToObject(cfg, "ioc_data", g_ctx.cfg->ioc_data);
+    cJSON_AddStringToObject(cfg, "policy_phase", g_ctx.cfg->policy_phase);
+    cJSON_AddStringToObject(cfg, "event_log_path", g_ctx.cfg->event_log_path);
     return cfg;
 }
 
@@ -129,6 +135,10 @@ static char *handle_set_config(cJSON *req_config) {
     cJSON *paused = cJSON_GetObjectItemCaseSensitive(req_config, "paused");
     cJSON *endpoint = cJSON_GetObjectItemCaseSensitive(req_config, "llm_endpoint");
     cJSON *model = cJSON_GetObjectItemCaseSensitive(req_config, "llm_model");
+    cJSON *asset_id = cJSON_GetObjectItemCaseSensitive(req_config, "asset_id");
+    cJSON *ioc_data = cJSON_GetObjectItemCaseSensitive(req_config, "ioc_data");
+    cJSON *policy_phase = cJSON_GetObjectItemCaseSensitive(req_config, "policy_phase");
+    cJSON *event_log_path = cJSON_GetObjectItemCaseSensitive(req_config, "event_log_path");
 
     if (tick_ms && (!cJSON_IsNumber(tick_ms) ||
                     tick_ms->valuedouble < MASK_CFG_TICK_MS_MIN ||
@@ -151,6 +161,22 @@ static char *handle_set_config(cJSON *req_config) {
                   strlen(model->valuestring) >= MASK_CFG_MODEL_MAX)) {
         return build_error_response("llm_model must be a non-empty string");
     }
+    if (asset_id && (!cJSON_IsString(asset_id) ||
+                     strlen(asset_id->valuestring) >= MASK_CFG_ASSET_ID_MAX)) {
+        return build_error_response("asset_id must be a string shorter than 64");
+    }
+    if (ioc_data && (!cJSON_IsString(ioc_data) ||
+                     strlen(ioc_data->valuestring) >= MASK_CFG_IOC_MAX)) {
+        return build_error_response("ioc_data must be a string shorter than 4096");
+    }
+    if (policy_phase && (!cJSON_IsString(policy_phase) ||
+                        strlen(policy_phase->valuestring) >= MASK_CFG_PHASE_MAX)) {
+        return build_error_response("policy_phase must be a string shorter than 32");
+    }
+    if (event_log_path && (!cJSON_IsString(event_log_path) ||
+                           strlen(event_log_path->valuestring) >= MASK_CFG_PATH_MAX)) {
+        return build_error_response("event_log_path must be a string shorter than " STRINGIFY(MASK_CFG_PATH_MAX));
+    }
 
     /* All present fields validated -- now apply. */
     if (tick_ms) {
@@ -171,6 +197,21 @@ static char *handle_set_config(cJSON *req_config) {
     }
     if (model) {
         snprintf(g_ctx.cfg->llm_model, sizeof(g_ctx.cfg->llm_model), "%s", model->valuestring);
+    }
+    if (asset_id) {
+        snprintf(g_ctx.cfg->asset_id, sizeof(g_ctx.cfg->asset_id), "%s", asset_id->valuestring);
+    }
+    if (ioc_data) {
+        snprintf(g_ctx.cfg->ioc_data, sizeof(g_ctx.cfg->ioc_data), "%s", ioc_data->valuestring);
+    }
+    if (policy_phase) {
+        snprintf(g_ctx.cfg->policy_phase, sizeof(g_ctx.cfg->policy_phase), "%s", policy_phase->valuestring);
+    }
+    if (event_log_path) {
+        snprintf(g_ctx.cfg->event_log_path, sizeof(g_ctx.cfg->event_log_path), "%s", event_log_path->valuestring);
+        /* Reopen the event log under the new path (closes old fd if open). */
+        mask_event_log_close(&g_ctx.cfg->event_log_fd);
+        g_ctx.cfg->event_log_fd = mask_event_log_open(g_ctx.cfg);
     }
 
     cJSON *root = cJSON_CreateObject();

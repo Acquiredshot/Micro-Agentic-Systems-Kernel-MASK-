@@ -5,7 +5,9 @@
 #include <string.h>
 
 /* Reads a handful of cheap, always-present /proc metrics and returns them
- * as a small JSON object. Ignores args_json (no parameters needed). */
+ * as a small JSON object. Ignores args_json (no parameters needed).
+ * The output is a bare payload; main.c wraps it in a mask_event_envelope
+ * before storing it in the ring buffer. */
 int tool_sysinfo(const char *args_json, char *output, size_t output_size) {
     (void)args_json;
 

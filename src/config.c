@@ -45,4 +45,8 @@ void mask_config_load_env(struct mask_config *cfg) {
     override_int(&cfg->llm_every_n_ticks, "MASK_LLM_EVERY_N_TICKS");
     override_size(&cfg->ring_buffer_capacity, "MASK_RING_CAPACITY");
     override_int(&cfg->ipc_port, "MASK_IPC_PORT");
+    override_str(cfg->asset_id, sizeof(cfg->asset_id), "MASK_ASSET_ID");
+    override_str(cfg->ioc_data, sizeof(cfg->ioc_data), "MASK_IOC_DATA");
+    override_str(cfg->policy_phase, sizeof(cfg->policy_phase), "MASK_POLICY_PHASE");
+    override_str(cfg->event_log_path, sizeof(cfg->event_log_path), "MASK_EVENT_LOG_PATH");
 }

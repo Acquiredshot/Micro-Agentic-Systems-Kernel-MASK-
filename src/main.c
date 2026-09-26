@@ -1,10 +1,11 @@
-#include "mask/common.h"
 #include "mask/config.h"
+#include "mask/common.h"
 #include "mask/ring_buffer.h"
 #include "mask/reactor.h"
 #include "mask/tool_gateway.h"
 #include "mask/llm_client.h"
 #include "mask/ipc.h"
+#include "mask/sandbox.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -18,6 +19,11 @@
 
 int tool_sysinfo(const char *args_json, char *output, size_t output_size);
 int tool_run_shell(const char *args_json, char *output, size_t output_size);
+int tool_net_connections(const char *args_json, char *output, size_t output_size);
+int tool_listening_sockets(const char *args_json, char *output, size_t output_size);
+int tool_process_list(const char *args_json, char *output, size_t output_size);
+int tool_user_sessions(const char *args_json, char *output, size_t output_size);
+int tool_action(const char *args_json, char *output, size_t output_size);
 
 struct mask_daemon {
     struct mask_config cfg;
@@ -40,6 +46,9 @@ struct mask_llm_job {
     struct mask_daemon *d;
     char llm_endpoint[MASK_CFG_ENDPOINT_MAX];
     char llm_model[MASK_CFG_MODEL_MAX];
+    char asset_id[MASK_CFG_ASSET_ID_MAX];
+    char ioc_data[MASK_CFG_IOC_MAX];
+    int policy_phase;
 };
 
 /* Runs on a detached worker thread so the reactor's epoll loop is never
@@ -57,10 +66,17 @@ static void *llm_worker_main(void *arg) {
 
     char prompt[4096];
     int off = snprintf(prompt, sizeof(prompt),
-        "You are the reasoning core of MASK, a system-monitoring daemon. "
-        "Available tools (call at most one, by replying with JSON of the form "
-        "{\"tool\":\"<name>\",\"args\":{...}} or {\"tool\":null,\"say\":\"<note>\"} "
-        "if no action is needed): %s\n\nRecent observations:\n",
+        "You are MASK, the Network/Asset Intelligence agent of the WOLF-PAK "
+        "security platform. Your host is asset '%s'. Current policy phase: %s.\n"
+        "Threat intelligence indicators (IOCs) — treat any observation matching "
+        "these as high severity: %s\n"
+        "Available tools (call at most one per cycle, by replying with JSON "
+        "of the form {\"tool\":\"<name>\",\"args\":{...}} or "
+        "{\"tool\":null,\"say\":\"<note>\"} if no action is needed): %s\n"
+        "\nRecent observations:\n",
+        job->asset_id[0] ? job->asset_id : "unknown",
+        job->policy_phase ? "respond" : (job->policy_phase == 1 ? "investigate" : "observe"),
+        job->ioc_data[0] ? job->ioc_data : "(none loaded)",
         manifest ? manifest : "[]");
     free(manifest);
 
@@ -91,11 +107,31 @@ static void *llm_worker_main(void *arg) {
 
             char tool_output[1024];
             int rc = mask_tool_gateway_dispatch(&d->tools, tool_name->valuestring,
-                                                 args_str, tool_output, sizeof(tool_output));
-            char logline[1200];
-            snprintf(logline, sizeof(logline), "%s -> (%d) %s",
-                     tool_name->valuestring, rc, tool_output);
+                                                 args_str, tool_output, sizeof(tool_output),
+                                                 job->policy_phase);
+
+            /* Wrap the tool's raw output in a standard event envelope so the
+             * ring buffer and any downstream consumers (Event Fabric, Security
+             * Graph, cross-app correlators) get structured events. */
+            uint64_t now = mask_now_ms();
+            char *envelope = mask_event_envelope(now, job->asset_id,
+                tool_name->valuestring, "info", tool_output);
+            char logline[2048];
+            if (envelope) {
+                snprintf(logline, sizeof(logline), "%s", envelope);
+                free(envelope);
+            } else {
+                snprintf(logline, sizeof(logline),
+                         "{\"timestamp_ms\":%" PRIu64 ",\"asset_id\":\"%s\","
+                         "\"source\":\"MASK\",\"event_type\":\"%s\",\"severity\":\"info\","
+                         "\"payload\":%s}",
+                         now, job->asset_id, tool_name->valuestring, tool_output);
+            }
+
             mask_ring_buffer_push(&d->ring, "tool", logline);
+            if (d->cfg.event_log_fd >= 0) {
+                mask_event_log_write(d->cfg.event_log_fd, logline);
+            }
             MASK_LOGI("dispatched tool '%s' -> rc=%d out=%.200s",
                       tool_name->valuestring, rc, tool_output);
 
@@ -118,6 +154,8 @@ static void on_timer_tick(struct mask_reactor *r, int fd, uint32_t events, void 
     (void)events;
     struct mask_daemon *d = (struct mask_daemon *)user_data;
 
+    int log_fd = d->cfg.event_log_fd;
+
     uint64_t expirations;
     if (read(fd, &expirations, sizeof(expirations)) != sizeof(expirations)) {
         return;
@@ -127,7 +165,24 @@ static void on_timer_tick(struct mask_reactor *r, int fd, uint32_t events, void 
 
     char sysinfo_out[256];
     if (tool_sysinfo(NULL, sysinfo_out, sizeof(sysinfo_out)) == MASK_OK) {
-        mask_ring_buffer_push(&d->ring, "sysinfo", sysinfo_out);
+        uint64_t now = mask_now_ms();
+        char *envelope = mask_event_envelope(now, d->cfg.asset_id,
+            "sysinfo", "info", sysinfo_out);
+        if (envelope) {
+            mask_ring_buffer_push(&d->ring, "sysinfo", envelope);
+            free(envelope);
+        } else {
+            mask_ring_buffer_push(&d->ring, "sysinfo", sysinfo_out);
+        }
+
+        if (log_fd >= 0) {
+            char *jline = mask_event_envelope(now, d->cfg.asset_id,
+                "sysinfo", "info", sysinfo_out);
+            if (jline) {
+                mask_event_log_write(log_fd, jline);
+                free(jline);
+            }
+        }
     }
 
     if (!d->cfg.paused && d->cfg.llm_every_n_ticks > 0 &&
@@ -143,6 +198,11 @@ static void on_timer_tick(struct mask_reactor *r, int fd, uint32_t events, void 
             job->d = d;
             snprintf(job->llm_endpoint, sizeof(job->llm_endpoint), "%s", d->cfg.llm_endpoint);
             snprintf(job->llm_model, sizeof(job->llm_model), "%s", d->cfg.llm_model);
+            snprintf(job->asset_id, sizeof(job->asset_id), "%s", d->cfg.asset_id);
+            snprintf(job->ioc_data, sizeof(job->ioc_data), "%s", d->cfg.ioc_data);
+            job->policy_phase = (d->cfg.policy_phase[0] == 'r') ? MASK_TOOL_PHASE_RESPOND :
+                                (d->cfg.policy_phase[0] == 'i') ? MASK_TOOL_PHASE_INVESTIGATE :
+                                MASK_TOOL_PHASE_OBSERVE;
 
             pthread_t worker;
             if (pthread_create(&worker, NULL, llm_worker_main, job) == 0) {
@@ -183,9 +243,32 @@ int main(void) {
 
     mask_tool_gateway_init(&daemon.tools);
     mask_tool_gateway_register(&daemon.tools, "sysinfo",
-        "Returns current load average and memory info as JSON.", tool_sysinfo);
+        "Returns current load average and memory info as JSON.", tool_sysinfo,
+        MASK_TOOL_PHASE_OBSERVE);
     mask_tool_gateway_register(&daemon.tools, "run_shell",
-        "Runs a sandboxed command. Args: {\"argv\":[\"cmd\",\"arg1\",...]}.", tool_run_shell);
+        "Runs a sandboxed command. Args: {\"argv\":[\"cmd\",\"arg1\",...]}. "
+        "Requires investigate phase.", tool_run_shell,
+        MASK_TOOL_PHASE_INVESTIGATE);
+    mask_tool_gateway_register(&daemon.tools, "net_connections",
+        "Returns active TCP/UDP connections. Optional args: {\"proto\":\"tcp\"|\"udp\"}. "
+        "Output: array of {proto,state,local,peer,pid,process}.", tool_net_connections,
+        MASK_TOOL_PHASE_OBSERVE);
+    mask_tool_gateway_register(&daemon.tools, "listening_sockets",
+        "Returns TCP/UDP sockets in LISTEN state. Args: {}. "
+        "Output: array of {proto,local,peer,pid,process}.", tool_listening_sockets,
+        MASK_TOOL_PHASE_OBSERVE);
+    mask_tool_gateway_register(&daemon.tools, "process_list",
+        "Returns all running processes. Optional args: {\"extra\":\"cmdline\"}. "
+        "Output: array of {pid,user,stat,cpu,mem,vsz,rss,comm[,cmdline]}.", tool_process_list,
+        MASK_TOOL_PHASE_OBSERVE);
+    mask_tool_gateway_register(&daemon.tools, "user_sessions",
+        "Returns currently logged-in users. Args: {}. "
+        "Output: array of {user,tty,login[,host]}.", tool_user_sessions,
+        MASK_TOOL_PHASE_OBSERVE);
+    mask_tool_gateway_register(&daemon.tools, "action",
+        "Structured response actions: kill_process, disable_user, isolate_network, "
+        "rotate_credential. Requires respond phase.", tool_action,
+        MASK_TOOL_PHASE_RESPOND);
 
     if (mask_reactor_init(&daemon.reactor) != MASK_OK) {
         MASK_LOGE("failed to init reactor");
@@ -222,6 +305,10 @@ int main(void) {
     }
 
     mask_ring_buffer_push(&daemon.ring, "system", "MASK daemon started");
+
+    /* Open the per-host event log file (if a path is configured). */
+    daemon.cfg.event_log_fd = mask_event_log_open(&daemon.cfg);
+
     mask_reactor_run(&daemon.reactor);
 
     MASK_LOGI("waiting for in-flight LLM worker (if any) to finish");
@@ -231,6 +318,7 @@ int main(void) {
     mask_ring_buffer_push(&daemon.ring, "system", "MASK daemon stopping");
 
 shutdown:
+    mask_event_log_close(&daemon.cfg.event_log_fd);
     mask_ipc_shutdown();
     mask_reactor_destroy(&daemon.reactor);
     mask_llm_client_global_cleanup();
