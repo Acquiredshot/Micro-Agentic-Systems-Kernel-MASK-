@@ -49,4 +49,9 @@ void mask_config_load_env(struct mask_config *cfg) {
     override_str(cfg->ioc_data, sizeof(cfg->ioc_data), "MASK_IOC_DATA");
     override_str(cfg->policy_phase, sizeof(cfg->policy_phase), "MASK_POLICY_PHASE");
     override_str(cfg->event_log_path, sizeof(cfg->event_log_path), "MASK_EVENT_LOG_PATH");
+    override_str(cfg->event_export_url, sizeof(cfg->event_export_url), "MASK_EVENT_EXPORT_URL");
+    override_str(cfg->run_shell_allowlist, sizeof(cfg->run_shell_allowlist), "MASK_RUN_SHELL_ALLOWLIST");
+    override_str(cfg->threat_feed_url, sizeof(cfg->threat_feed_url), "MASK_THREAT_FEED_URL");
+    override_int(&cfg->threat_feed_interval_ms, "MASK_THREAT_FEED_INTERVAL_MS");
+    cfg->threat_feed_interval_ms = (cfg->threat_feed_interval_ms > 0) ? cfg->threat_feed_interval_ms : 300000; /* 5min default */
 }

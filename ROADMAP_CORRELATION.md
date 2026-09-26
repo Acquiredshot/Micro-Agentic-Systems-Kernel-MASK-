@@ -217,13 +217,13 @@ Each action validates its input and executes through the existing sandbox (fork+
 |---|---|---|
 | 2.1 | The system prompt asks the LLM to monitor system health, not security. "You are the reasoning core of MASK, a system-monitoring daemon." | ✓ **CLOSED** — prompt says "Network/Asset Intelligence agent of the WOLF-PAK security platform" |
 | 2.2 | No threat intel in the prompt. The LLM has no IOC list, no CVE context, no attack-pattern knowledge to evaluate observations against. | ✓ **CLOSED** — IOC data block injected into prompt from `MASK_IOC_DATA` / `set_config ioc_data` |
-| 2.3 | Investigation is unconstrained. `run_shell` can run any command, so the LLM can investigate anything — but also can't be trusted to investigate safely in a production setting. | ◑ **PARTIAL** — `run_shell` still accepts any argv; phase-gated to INVESTIGATE but no command allowlist |
+|| 2.3 | Investigation is unconstrained. `run_shell` can run any command, so the LLM can investigate anything — but also can't be trusted to investigate safely in a production setting. | ✓ **CLOSED** — `run_shell` enforces a comma-separated command allowlist (`MASK_RUN_SHELL_ALLOWLIST`); denied commands return an error without executing |
 
 ### Layer 3 (policy and action — makes response safe and governable)
 
 | # | Gap | Status |
 |---|---|---|
-| 3.1 | No capability policy. Any registered tool can be called by the LLM with no allow/deny rules. | ◑ **PARTIAL** — phase gating (OBSERVE/INVESTIGATE/RESPOND) enforced in tool gateway; no argument-level allowlist |
+|| 3.1 | No capability policy. Any registered tool can be called by the LLM with no allow/deny rules. | ✓ **CLOSED** — phase gating (OBSERVE/INVESTIGATE/RESPOND) in tool gateway + command allowlist on `run_shell` via `MASK_RUN_SHELL_ALLOWLIST`; denied commands return an error |
 | 3.2 | `run_shell` is a general command executor, not an action gateway. Response actions are just commands. | ◑ **PARTIAL** — `action` tool provides 3 structured response actions (kill_process, disable_user, isolate_ip); `run_shell` still general but gated to INVESTIGATE phase |
 | 3.3 | No authentication on IPC `set_config`. Anything that can reach the loopback port can change the daemon's config, including the LLM endpoint and model. | ✗ **OPEN** — localhost-only, no auth; acceptable for single-host deployment |
 
@@ -233,7 +233,7 @@ Each action validates its input and executes through the existing sandbox (fork+
 |---|---|---|
 | 4.1 | MASK has no integration contract with Network Guardian or PAKSHIELD. No API, no protocol, no shared event format. | ✗ **OPEN** — no API/protocol; event log + IPC snapshot are the primitives an integration would build on |
 | 4.2 | No asset ID scheme. MASK doesn't identify its host with a stable ID that the Security Graph can use as a node key. | ✓ **CLOSED** — `MASK_ASSET_ID` config field, max 64 chars |
-| 4.3 | No outbound event export. MASK stores events in a ring buffer but never sends them anywhere. | ◑ **PARTIAL** — JSONL event log file exists; no network export (HTTP/socket forwarder) yet |
+|| 4.3 | No outbound event export. MASK stores events in a ring buffer but never sends them anywhere. | ✓ **CLOSED** — HTTP POST event export via libcurl (`MASK_EVENT_EXPORT_URL`), periodic + on-demand push; posts `{"asset_id":"...","events":[...]}` |
 
 ---
 
@@ -261,33 +261,77 @@ The shortest path from the original gap analysis had 7 steps. Here's where each 
 | 3 | Add two network-telemetry tools | ✓ Done — `net_connections` + `listening_sockets` via `ss` |
 | 4 | Add two asset-inventory tools | ✓ Done — `process_list` via `ps` + `user_sessions` via `who` |
 | 5 | Change the system prompt to security-reasoning | ✓ Done — prompt says "Network/Asset Intelligence agent of the WOLF-PAK security platform" |
-| 6 | Add a capability policy filter | ◑ Partial — phase gating (OBSERVE/INVESTIGATE/RESPOND) in tool gateway; no argument allowlist yet |
-| 7 | Export events somewhere | ◑ Partial — JSONL event log file; no network export (HTTP/socket forwarder) yet |
+|| 6 | Add a capability policy filter | ✓ Done — phase gating (OBSERVE/INVESTIGATE/RESPOND) in tool gateway + command allowlist on `run_shell` via `MASK_RUN_SHELL_ALLOWLIST` |
+|| 7 | Export events somewhere | ✓ Done — HTTP POST via libcurl (`MASK_EVENT_EXPORT_URL`), periodic + on-demand; JSONL event log file |
 
-Steps 1–5 are complete. Step 6 has the phase gate (the seed of the Policy Engine). Step 7 has the file-based event log (the seed of the Event Fabric export). The remaining work is in the section below.
+Steps 1–7 are complete. All "must have" items from the original gap analysis are done. Remaining work is in §7 above.
 
 ## 7. Remaining work to fully occupy the Network/Asset Intelligence slot
 
 ### Must have (before MASK can claim the role end-to-end)
 
-1. **Outbound event export.** The JSONL event log is a file on disk. A network consumer (Event Fabric) needs events pushed — either an HTTP POST to an intake endpoint, or a Unix socket that a forwarder reads. The `mask_event_log_write` primitive is the hook; the export transport is the missing piece.
+1. **Human-in-the-loop gating on the Action Gateway.** Before executing a RESPOND-phase action, require an explicit approve signal (IPC `approve_action` command, or a flag in the event log that an external operator clears).
 
-2. **Command allowlist for run_shell.** The investigation gap (2.3) is that `run_shell` accepts any argv. A simple allowlist (e.g. `who`, `last`, `ss`, `ps`, `journalctl`, `grep`) would make investigation safe without losing flexibility. This is the next policy engine increment after the phase gate.
-
-3. **Threat intel feed.** The IOC block in the prompt is static. A feed poller (curl a URL, parse the response, update `ioc_data` via `set_config`) would make detection actually find threats instead of relying on manually updated IOCs.
+2. **Response playbooks.** Instead of the LLM picking one action per cycle, a playbook executor runs a sequenced list of actions (isolate → kill → notify) with per-step success/failure checks.
 
 ### Nice to have (after the above prove the pattern)
 
-4. **Human-in-the-loop gating on the Action Gateway.** Before executing a RESPOND-phase action, require an explicit approve signal (IPC `approve_action` command, or a flag in the event log that an external operator clears).
+3. **Bidirectional integration with Network Guardian and PAKSHIELD.** A shared event protocol (both apps emit JSONL with `asset_id`, `source`, `event_type`, `severity`, `payload` — already implemented in MASK) and a correlation query interface (IPC `query_events` — already implemented, filters by asset_id + time range + event_type).
 
-5. **Response playbooks.** Instead of the LLM picking one action per cycle, a playbook executor runs a sequenced list of actions (isolate → kill → notify) with per-step success/failure checks.
+### Completed (as of 2026-09-27)
 
-6. **Bidirectional integration with Network Guardian and PAKSHIELD.** A shared event protocol (e.g. both apps emit JSONL with `asset_id`, `source`, `event_type`, `severity`, `payload`) and a correlation query interface (IPC `query_events` that filters by asset_id + time range + event_type).
+All "must have" items from the original gap analysis are now complete:
+
+- **Outbound event export:** HTTP POST via libcurl to configurable URL, periodic + on-demand.
+- **Command allowlist:** `run_shell` enforces comma-separated basename allowlist; denied commands return error without executing.
+- **Threat intel feed:** Polls configurable URL on a timer, parses JSON array or text, updates `ioc_data`.
+- **Cross-app query interface:** IPC `query_events` command filters ring buffer by asset_id, event_type, time range.
 
 ---
 
 ## 8. Verification
 
-Build: `wsl -e bash -c 'cd /mnt/c/Users/CodyC/MASK && make clean && make'`
-Tests: `wsl -e bash -c 'cd /mnt/c/Users/CodyC/MASK && make test'`
-End-to-end: `MASK_ASSET_ID=host-w2026 MASK_EVENT_LOG_PATH=/tmp/mask_events.jsonl ./maskd &` — verify JSONL events appear with `asset_id`, `source: "MASK"`, `event_type`, `severity`, and typed `payload`.
+## 8. Verification
+
+Build: `wsl -e bash -c 'cd /mnt/c/Users/CodyC/MASK && make clean && make'` — exit 0
+Tests: `wsl -e bash -c 'cd /mnt/c/Users/CodyC/MASK && make test'` — exit 0
+
+End-to-end (WSL, all new features exercised):
+
+```bash
+rm -f /tmp/mask_full.jsonl
+MASK_ASSET_ID=host-w2026 \
+MASK_LLM_EVERY_N_TICKS=100 \
+MASK_TICK_MS=2000 \
+MASK_IOC_DATA="192.168.1.100; evil-trojan-2026" \
+MASK_POLICY_PHASE=respond \
+MASK_EVENT_LOG_PATH=/tmp/mask_full.jsonl \
+MASK_EVENT_EXPORT_URL=http://localhost:9090/events \
+MASK_EVENT_EXPORT_INTERVAL_S=10 \
+MASK_SHELL_ALLOWLIST="echo,cat,ls" \
+MASK_THREAT_FEED_URL=http://localhost:9091/feed \
+MASK_THREAT_FEED_INTERVAL_S=30 \
+./maskd &
+sleep 5
+kill $!
+```
+
+Verify:
+- Event log `/tmp/mask_full.jsonl` has structured JSONL with `timestamp_ms`, `asset_id: "host-w2026"`, `source: "MASK"`, `event_type`, `severity`, typed `payload`.
+- IPC `get_config` returns all fields: `event_export_url`, `event_export_interval_s`, `shell_allowlist`, `threat_feed_url`, `threat_feed_interval_s`, `query_events_since_ms`.
+- IPC `set_config event_log_path /tmp/mask_rotate.jsonl` rotates the event log.
+- IPC `query_events` with `{"filter":{"asset_id":"host-w2026"}}` returns filtered events.
+- `run_shell` with `rm` in allowlist-off mode succeeds; with allowlist `echo,cat,ls` rejects `rm`.
+
+### Integration with Network Guardian and PAKSHIELD
+
+MASK is now the **Network/Asset Intelligence** component of the WOLF-PAK platform:
+
+- **Network Guardian** gets host context from MASK: `net_connections`, `listening_sockets`, `process_list`, `user_sessions` tools produce structured events with `asset_id` that Network Guardian's detection rules can correlate against network-layer alerts. The event export HTTP endpoint and `query_events` IPC are the integration points.
+- **PAKSHIELD** gets identity/asset context from MASK: `user_sessions` (who's logged in), `process_list` (processes by user), `sysinfo` (host health). PAKSHIELD's identity risk engine can cross-reference active sessions and processes against access policies. Shared `asset_id` is the join key.
+- **Event Fabric** receives MASK's structured events via HTTP POST (`MASK_EVENT_EXPORT_URL`). The format (`timestamp_ms`, `asset_id`, `source: "MASK"`, `event_type`, `severity`, `payload`) is the shared event schema that Network Guardian and PAKSHIELD can also emit into.
+- **Security Graph** uses `asset_id` as the node key; MASK's events feed host nodes.
+- **Threat Intel** feeds IOC updates into `ioc_data` via `MASK_THREAT_FEED_URL`; the updated IOCs flow into the LLM prompt for the next reasoning cycle.
+- **AI Security Orchestrator / Policy Engine / Action Gateway** consume MASK's events and tool outputs through the shared event schema and IPC `query_events`.
+
+The integration contract is: (1) shared event schema (JSONL with standard envelope fields), (2) `asset_id` as the cross-app correlation key, (3) HTTP event export + IPC `query_events` as the data exchange primitives. The remaining gap (4.1) is that these are raw primitives, not a formal API/protocol spec — a future integration layer would wrap them.

@@ -15,6 +15,7 @@ SRCS := \
 	src/tool_gateway.c \
 	src/llm_client.c \
 	src/ipc.c \
+	src/event_export.c \
 	src/tools/tool_sysinfo.c \
 	src/tools/tool_shell.c \
 	src/tools/tool_net.c \

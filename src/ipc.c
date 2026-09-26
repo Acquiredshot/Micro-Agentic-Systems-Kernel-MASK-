@@ -1,5 +1,6 @@
 #include "mask/ipc.h"
 #include "mask/common.h"
+#include "mask/event_export.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -68,6 +69,10 @@ static cJSON *build_config_json(void) {
     cJSON_AddStringToObject(cfg, "ioc_data", g_ctx.cfg->ioc_data);
     cJSON_AddStringToObject(cfg, "policy_phase", g_ctx.cfg->policy_phase);
     cJSON_AddStringToObject(cfg, "event_log_path", g_ctx.cfg->event_log_path);
+    cJSON_AddStringToObject(cfg, "event_export_url", g_ctx.cfg->event_export_url);
+    cJSON_AddStringToObject(cfg, "run_shell_allowlist", g_ctx.cfg->run_shell_allowlist);
+    cJSON_AddStringToObject(cfg, "threat_feed_url", g_ctx.cfg->threat_feed_url);
+    cJSON_AddNumberToObject(cfg, "threat_feed_interval_ms", g_ctx.cfg->threat_feed_interval_ms);
     return cfg;
 }
 
@@ -139,6 +144,9 @@ static char *handle_set_config(cJSON *req_config) {
     cJSON *ioc_data = cJSON_GetObjectItemCaseSensitive(req_config, "ioc_data");
     cJSON *policy_phase = cJSON_GetObjectItemCaseSensitive(req_config, "policy_phase");
     cJSON *event_log_path = cJSON_GetObjectItemCaseSensitive(req_config, "event_log_path");
+    cJSON *run_shell_allowlist = cJSON_GetObjectItemCaseSensitive(req_config, "run_shell_allowlist");
+    cJSON *threat_feed_url = cJSON_GetObjectItemCaseSensitive(req_config, "threat_feed_url");
+    cJSON *threat_feed_interval = cJSON_GetObjectItemCaseSensitive(req_config, "threat_feed_interval_ms");
 
     if (tick_ms && (!cJSON_IsNumber(tick_ms) ||
                     tick_ms->valuedouble < MASK_CFG_TICK_MS_MIN ||
@@ -207,6 +215,15 @@ static char *handle_set_config(cJSON *req_config) {
     if (policy_phase) {
         snprintf(g_ctx.cfg->policy_phase, sizeof(g_ctx.cfg->policy_phase), "%s", policy_phase->valuestring);
     }
+    if (run_shell_allowlist) {
+        snprintf(g_ctx.cfg->run_shell_allowlist, sizeof(g_ctx.cfg->run_shell_allowlist), "%s", run_shell_allowlist->valuestring);
+    }
+    if (threat_feed_url) {
+        snprintf(g_ctx.cfg->threat_feed_url, sizeof(g_ctx.cfg->threat_feed_url), "%s", threat_feed_url->valuestring);
+    }
+    if (threat_feed_interval) {
+        g_ctx.cfg->threat_feed_interval_ms = (int)threat_feed_interval->valuedouble;
+    }
     if (event_log_path) {
         snprintf(g_ctx.cfg->event_log_path, sizeof(g_ctx.cfg->event_log_path), "%s", event_log_path->valuestring);
         /* Reopen the event log under the new path (closes old fd if open). */
@@ -237,6 +254,21 @@ static void handle_request(struct mask_reactor *r, struct mask_ipc_conn *c, cons
         response = build_get_config_response();
     } else if (cmd_str && strcmp(cmd_str, "set_config") == 0) {
         response = handle_set_config(cJSON_GetObjectItemCaseSensitive(parsed, "config"));
+    } else if (cmd_str && strcmp(cmd_str, "query_events") == 0) {
+        cJSON *filter = cJSON_GetObjectItemCaseSensitive(parsed, "filter");
+        /* Build a wrapper: mask_query_events expects {"filter": {...}} */
+        cJSON *wrapper = cJSON_CreateObject();
+        if (filter && cJSON_IsObject(filter)) {
+            /* Clone the filter so we don't move it between cJSON trees */
+            cJSON *clone = cJSON_Duplicate(filter, 1);
+            cJSON_AddItemToObject(wrapper, "filter", clone);
+        } else {
+            cJSON_AddItemToObject(wrapper, "filter", cJSON_CreateObject());
+        }
+        const char *filter_str = cJSON_PrintUnformatted(wrapper);
+        response = mask_query_events(&g_ctx, filter_str);
+        free((char *)filter_str);
+        cJSON_Delete(wrapper);
     } else {
         response = build_error_response("unknown or missing 'cmd'");
     }

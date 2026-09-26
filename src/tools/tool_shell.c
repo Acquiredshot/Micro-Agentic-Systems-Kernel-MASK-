@@ -1,14 +1,63 @@
 #include "mask/tool_gateway.h"
 #include "mask/sandbox.h"
 #include "mask/common.h"
+#include "mask/config.h"
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "cJSON.h"
 
 #define MASK_SHELL_MAX_ARGS 16
 #define MASK_SHELL_ARG_MAX 256
+
+/* Allowlist enforcement for run_shell. When the daemon's
+ * run_shell_allowlist config is set, only commands whose basename
+ * appears in the comma-separated list are permitted. This is the
+ * first step towards a capability policy that makes investigation
+ * safe in production (gap 2.3 / roadmap §7.2).
+ *
+ * The allowlist pointer is set by main.c from the live config at
+ * dispatch time, so it picks up runtime changes made via set_config
+ * without needing a restart. */
+static const char *g_shell_allowlist = NULL;
+
+void mask_shell_set_allowlist(const char *allowlist) {
+    g_shell_allowlist = allowlist;
+}
+
+/* Returns 1 if the given command's basename is in the allowlist, 0
+ * otherwise. When the allowlist is NULL or empty, all commands are
+ * permitted (the original behaviour). */
+static int cmd_allowed(const char *cmd) {
+    if (!g_shell_allowlist || !g_shell_allowlist[0]) return 1;
+
+    /* Extract basename: last component after the final '/' */
+    const char *base = strrchr(cmd, '/');
+    base = base ? base + 1 : cmd;
+
+    /* Parse comma-separated allowlist */
+    char *list = strdup(g_shell_allowlist);
+    if (!list) return 0;
+
+    int allowed = 0;
+    char *tok = strtok(list, ",");
+    while (tok) {
+        /* Trim whitespace */
+        while (*tok == ' ' || *tok == '\t') tok++;
+        char *end = tok + strlen(tok) - 1;
+        while (end > tok && (*end == ' ' || *end == '\t' || *end == '\n')) *end-- = '\0';
+
+        if (strcmp(base, tok) == 0) {
+            allowed = 1;
+            break;
+        }
+        tok = strtok(NULL, ",");
+    }
+    free(list);
+    return allowed;
+}
 
 /* Expects args_json of the form {"argv": ["echo", "hello"]}. Deliberately
  * takes an argv array rather than a raw command string so there is no shell
@@ -50,6 +99,14 @@ int tool_run_shell(const char *args_json, char *output, size_t output_size) {
         argv[i] = arg_storage[i];
     }
     argv[n] = NULL;
+
+    /* Allowlist check: if configured, verify the command is permitted. */
+    if (!cmd_allowed(argv[0])) {
+        cJSON_Delete(parsed);
+        snprintf(output, output_size, "error: command '%s' not in allowlist", argv[0]);
+        MASK_LOGW("tool_run_shell: '%s' denied by allowlist", argv[0]);
+        return MASK_ERR;
+    }
 
     cJSON_Delete(parsed);
 

@@ -9,6 +9,8 @@
 #define MASK_CFG_IOC_MAX 4096
 #define MASK_CFG_PHASE_MAX 32
 #define MASK_CFG_PATH_MAX 512
+#define MASK_CFG_URL_MAX 256
+#define MASK_CFG_ALLOWLIST_MAX 1024
 
 struct mask_config {
     char llm_endpoint[MASK_CFG_ENDPOINT_MAX];
@@ -21,6 +23,10 @@ struct mask_config {
     char ioc_data[MASK_CFG_IOC_MAX];
     char policy_phase[MASK_CFG_PHASE_MAX];
     char event_log_path[MASK_CFG_PATH_MAX];
+    char event_export_url[MASK_CFG_URL_MAX];
+    char run_shell_allowlist[MASK_CFG_ALLOWLIST_MAX];
+    char threat_feed_url[MASK_CFG_URL_MAX];
+    int threat_feed_interval_ms;
 
     /* Live-tunable at runtime via the IPC "set_config" command (see
      * src/ipc.c); not loaded from the environment. Reactor-thread-owned:
@@ -28,6 +34,7 @@ struct mask_config {
      * reactor thread reads them, so no locking is needed. */
     int paused;
     int event_log_fd;
+    int event_export_disable;
 };
 
 /* The three policy phases. In "observe" mode only read-only tools are

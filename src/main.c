@@ -5,6 +5,7 @@
 #include "mask/tool_gateway.h"
 #include "mask/llm_client.h"
 #include "mask/ipc.h"
+#include "mask/event_export.h"
 #include "mask/sandbox.h"
 
 #include <stdio.h>
@@ -19,6 +20,7 @@
 
 int tool_sysinfo(const char *args_json, char *output, size_t output_size);
 int tool_run_shell(const char *args_json, char *output, size_t output_size);
+void mask_shell_set_allowlist(const char *allowlist);
 int tool_net_connections(const char *args_json, char *output, size_t output_size);
 int tool_listening_sockets(const char *args_json, char *output, size_t output_size);
 int tool_process_list(const char *args_json, char *output, size_t output_size);
@@ -33,6 +35,7 @@ struct mask_daemon {
     atomic_int llm_busy;
     unsigned long tick_count;
     int tick_timer_fd;
+    struct mask_ipc_context ipc_ctx;
 };
 
 /* Config values an in-flight LLM worker needs are copied into this struct
@@ -110,6 +113,10 @@ static void *llm_worker_main(void *arg) {
                                                  args_str, tool_output, sizeof(tool_output),
                                                  job->policy_phase);
 
+            /* Update the run_shell allowlist pointer so the tool sees the
+             * latest config (set via IPC set_config) without a restart. */
+            mask_shell_set_allowlist(d->cfg.run_shell_allowlist);
+
             /* Wrap the tool's raw output in a standard event envelope so the
              * ring buffer and any downstream consumers (Event Fabric, Security
              * Graph, cross-app correlators) get structured events. */
@@ -162,6 +169,12 @@ static void on_timer_tick(struct mask_reactor *r, int fd, uint32_t events, void 
     }
 
     d->tick_count++;
+
+    /* Periodically poll the threat intel feed (if configured). */
+    if (d->cfg.threat_feed_url[0] && d->cfg.threat_feed_interval_ms > 0 &&
+        d->tick_count % (unsigned long)(d->cfg.threat_feed_interval_ms / d->cfg.tick_interval_ms) == 0) {
+        mask_threat_feed_trigger(&d->ipc_ctx);
+    }
 
     char sysinfo_out[256];
     if (tool_sysinfo(NULL, sysinfo_out, sizeof(sysinfo_out)) == MASK_OK) {
@@ -308,6 +321,19 @@ int main(void) {
 
     /* Open the per-host event log file (if a path is configured). */
     daemon.cfg.event_log_fd = mask_event_log_open(&daemon.cfg);
+
+    /* Populate the IPC context that the timer tick and export thread need. */
+    daemon.ipc_ctx = (struct mask_ipc_context){
+        .ring = &daemon.ring,
+        .tools = &daemon.tools,
+        .tick_count = &daemon.tick_count,
+        .llm_busy = &daemon.llm_busy,
+        .cfg = &daemon.cfg,
+        .tick_timer_fd = daemon.tick_timer_fd,
+    };
+
+    /* Start the outbound event export thread (if a URL is configured). */
+    mask_event_export_start(&daemon.ipc_ctx);
 
     mask_reactor_run(&daemon.reactor);
 
