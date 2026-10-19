@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #0d0d0d;
+  color: #ffffff;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #1a1a19;
+}
+::-webkit-scrollbar-thumb {
+  background: #383835;
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #52514e;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}

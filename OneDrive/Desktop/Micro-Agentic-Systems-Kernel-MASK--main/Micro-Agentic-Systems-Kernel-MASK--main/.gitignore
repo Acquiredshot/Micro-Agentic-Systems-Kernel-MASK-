@@ -1,0 +1,31 @@
+maskd
+tests/smoke_tools
+*.o
+*.exe
+.vscode/
+
+# Local environment files
+.env
+.env.*
+*.local
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Common build artifacts
+bin/
+obj/
+*.out
+*.log
+*.tmp
+
+# Node (bridge/, web/)
+node_modules/
+web/dist/
+dev_out.log
+dev_err.log
+bridge_out.log
+bridge_err.log
+
